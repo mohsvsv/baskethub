@@ -59,7 +59,7 @@ The data model includes the following tables:
 | external_id                   | external code received from the source system                         | 00                    |
 | code                          | internal code used to run the application                             | nba                   |
 | name                          | league readable name                                                  | NBA                   |
-| logo_url                      | path to S3 containing the logo image                                  | /logos/nba/league.png |
+| logo_url                      | path to S3 containing the logo image                                  | /images/nba/league.png |
 </details>
 
 <details>
@@ -100,7 +100,7 @@ The data model includes the following tables:
 | arena                         | team arena                                                             | American Airlines Center |
 | year_founded                  | team year of foundation                                                | 1960                     |
 | year_active_until             | year up to which the team existed; if the team still exists, then NULL | 1990                     |
-| logo_url                      | path to S3 containing the logo image                                   | /logos/nba/team/dal.png  |
+| logo_url                      | path to S3 containing the logo image                                   | /images/nba/team/dal.png  |
 </details>
 
 <details>
@@ -155,7 +155,7 @@ The data model includes the following tables:
 | ast                           | career assists average                                                | 12.1                  |
 | reb                           | career rebounds average                                               | 8.0                   |
 | pie                           | player impact estimate                                                | 0.89                  |
-| photo_url                     | path to S3 containing the player photo                                | /logos/nba/player/luka_doncic.png |
+| photo_url                     | path to S3 containing the player photo                                | /images/nba/player/luka_doncic.png |
 </details>
 
 <details>
