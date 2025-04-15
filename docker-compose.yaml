@@ -1,0 +1,367 @@
+x-airflow-common:
+        &airflow-common
+        build:
+                context: .
+                dockerfile: dockerfiles/airflow
+        environment:
+                &airflow-common-env
+                AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+                AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@airflow-db/${AIRFLOW_DB_NAME}
+                AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${AIRFLOW_DB_USER}:${AIRFLOW_DB_PASSWORD}@airflow-db/${AIRFLOW_DB_NAME}
+                AIRFLOW__CELERY__BROKER_URL: redis://:@airflow-broker:${AIRFLOW_REDIS_PORT}/0
+                AIRFLOW__CORE__FERNET_KEY: ''
+                AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+                AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+                AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+                AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+                _AIRFLOW_DB_MIGRATE: 'true'
+                _AIRFLOW_WWW_USER_CREATE: 'true'
+                _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_USER}
+                _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_PASSWORD}
+                _PIP_ADDITIONAL_REQUIREMENTS: ''
+                AIRFLOW_CONN_BASKETHUB_APP_DB: postgresql+psycopg2://${APP_DB_USER}:${APP_DB_PASSWORD}@app-db/${APP_DB_NAME}
+                AIRFLOW_CONN_BASKETHUB_S3: s3://${S3_USER}:${S3_PASSWORD}@${S3_ENDPOINT_URL}/${S3_BUCKET}
+        env_file:
+                - .env
+        volumes:
+                - ${AIRFLOW_PROJ_DIR}/dags:/opt/airflow/dags
+                - ${AIRFLOW_PROJ_DIR}/logs:/opt/airflow/logs
+                - ${AIRFLOW_PROJ_DIR}/config:/opt/airflow/config
+                - ${AIRFLOW_PROJ_DIR}/plugins:/opt/airflow/plugins
+        user: "${AIRFLOW_UID:-50000}:0"
+        depends_on:
+                &airflow-common-depends-on
+                airflow-broker:
+                        condition: service_healthy
+                airflow-db:
+                        condition: service_healthy
+
+services:
+
+        app-db:
+                build:
+                        context: .
+                        dockerfile: dockerfiles/database
+                container_name: app-db
+                ports:
+                        - "${APP_DB_PORT}:${APP_DB_PORT}"
+                environment:
+                        POSTGRES_DB: ${APP_DB_NAME}
+                        POSTGRES_USER: ${APP_DB_USER}
+                        POSTGRES_PASSWORD: ${APP_DB_PASSWORD}
+                env_file:
+                        - .env
+                volumes:
+                        - app-postgres-db:/var/lib/postgresql/data
+                networks:
+                        - app-network
+                restart: always
+                healthcheck:
+                        test: ["CMD-SHELL", "pg_isready", "-U", "${APP_DB_USER}"]
+                        interval: 5s
+                        timeout: 5s
+                        retries: 3
+
+        app-s3:
+                image: minio/minio:latest
+                container_name: app-s3-server
+                command: server /data --address ":${S3_API_PORT}" --console-address ":${S3_WEB_PORT}"
+                ports:
+                        - ${S3_API_PORT}:${S3_API_PORT}
+                        - ${S3_WEB_PORT}:${S3_WEB_PORT}
+                environment:
+                        MINIO_ROOT_USER: ${S3_USER}
+                        MINIO_ROOT_PASSWORD: ${S3_PASSWORD}
+                        MINIO_SERVER_URL: ${S3_ENDPOINT_URL}
+                        MINIO_BROWSER_REDIRECT_URL: ${S3_WEB_URL}
+                env_file:
+                        - .env
+                volumes:
+                        - minio-storage:/data
+                networks:
+                        - app-network
+                restart: always
+                healthcheck:
+                        test: ["CMD", "mc", "ready", "local"]
+                        interval: 5s
+                        timeout: 5s
+                        retries: 3
+
+        app-s3-init:
+                image: minio/mc:latest
+                container_name: app-s3-client
+                env_file:
+                        - .env
+                depends_on:
+                        app-s3:
+                                condition: service_healthy
+                network_mode: service:app-s3
+                entrypoint: >
+                        /bin/sh -c "
+                        echo URL: ${S3_ENDPOINT_URL};
+                        echo Credentials: ${S3_USER}:${S3_PASSWORD};
+                        /usr/bin/mc alias set app-s3 ${S3_ENDPOINT_URL} ${S3_USER} ${S3_PASSWORD};
+                        /usr/bin/mc mb app-s3/${S3_BUCKET} --ignore-existing;
+                        /usr/bin/mc anonymous set public app-s3/${S3_BUCKET};
+                        /usr/bin/mc admin user add app-s3 ${S3_STREAMLIT_USER} ${S3_STREAMLIT_PASSWORD};
+                        /usr/bin/mc admin policy attach app-s3 readonly readwrite writeonly --user ${S3_STREAMLIT_USER};
+                        /usr/bin/mc admin user add app-s3 ${S3_AIRFLOW_USER} ${S3_AIRFLOW_PASSWORD};
+                        /usr/bin/mc admin policy attach app-s3 readonly readwrite writeonly --user ${S3_AIRFLOW_USER}
+                        "
+
+        airflow-db:
+                image: postgres:13
+                container_name: airflow-db
+                ports:
+                        - "${AIRFLOW_DB_PORT}:5432"
+                environment:
+                        POSTGRES_DB: ${AIRFLOW_DB_NAME}
+                        POSTGRES_USER: ${AIRFLOW_DB_USER}
+                        POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD}
+                env_file: .env
+                volumes:
+                        - airflow-postgres-db:/var/lib/postgresql/data
+                networks:
+                        - app-network
+                restart: always
+                healthcheck:
+                        test: ["CMD", "pg_isready", "-U", "${AIRFLOW_DB_USER}"]
+                        interval: 10s
+                        retries: 5
+                        start_period: 5s
+
+        airflow-broker:
+                image: redis:7.2-bookworm
+                container_name: airflow-broker
+                expose:
+                        - ${AIRFLOW_REDIS_PORT}
+                env_file:
+                        - .env
+                networks:
+                        - app-network
+                restart: always
+                healthcheck:
+                        test: ["CMD", "redis-cli", "ping"]
+                        interval: 10s
+                        timeout: 30s
+                        retries: 50
+                        start_period: 30s
+    
+        airflow-webserver:
+                <<: *airflow-common
+                container_name: airflow-webserver
+                command: webserver
+                ports:
+                        - "${AIRFLOW_WEB_PORT}:${AIRFLOW_WEB_PORT}"
+                networks:
+                        - app-network
+                restart: always
+                healthcheck:
+                        test: ["CMD", "curl", "--fail", "${AIRFLOW_WEB_URL}/health"]
+                        interval: 30s
+                        timeout: 10s
+                        retries: 5
+                        start_period: 30s
+                depends_on:
+                        <<: *airflow-common-depends-on
+                        airflow-init:
+                                condition: service_completed_successfully
+
+        airflow-scheduler:
+                <<: *airflow-common
+                container_name: airflow-scheduler
+                command: scheduler
+                networks:
+                        - app-network
+                restart: always
+                healthcheck:
+                        test: ["CMD", "curl", "--fail", "${AIRFLOW_SCHEDULER_URL}/health"]
+                        interval: 30s
+                        timeout: 10s
+                        retries: 5
+                        start_period: 30s
+                depends_on:
+                        <<: *airflow-common-depends-on
+                        airflow-init:
+                                condition: service_completed_successfully
+
+        airflow-worker:
+                <<: *airflow-common
+                container_name: airflow-worker
+                command: celery worker
+                environment:
+                        <<: *airflow-common-env
+                        DUMB_INIT_SETSID: "0"
+                networks:
+                        - app-network
+                restart: always
+                healthcheck:
+                        test:
+                                - "CMD-SHELL"
+                                - 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
+                        interval: 30s
+                        timeout: 10s
+                        retries: 5
+                        start_period: 30s
+                depends_on:
+                        <<: *airflow-common-depends-on
+                        airflow-init:
+                                condition: service_completed_successfully
+
+        airflow-triggerer:
+                <<: *airflow-common
+                container_name: airflow-triggerer
+                command: triggerer
+                networks:
+                        - app-network
+                restart: always
+                healthcheck:
+                        test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+                        interval: 30s
+                        timeout: 10s
+                        retries: 5
+                        start_period: 30s
+                depends_on:
+                        <<: *airflow-common-depends-on
+                        airflow-init:
+                                condition: service_completed_successfully
+
+        airflow-init:
+                <<: *airflow-common
+                container_name: airflow-init
+                entrypoint: /bin/bash
+                command:
+                        - -c
+                        - |
+                                if [[ -z "${AIRFLOW_UID}" ]]; then
+                                        echo
+                                        echo -e "\033[1;33mWARNING!!!: AIRFLOW_UID not set!\e[0m"
+                                        echo "If you are on Linux, you SHOULD follow the instructions below to set "
+                                        echo "AIRFLOW_UID environment variable, otherwise files will be owned by root."
+                                        echo "For other operating systems you can get rid of the warning with manually created .env file:"
+                                        echo "    See: https://airflow.apache.org/docs/apache-airflow/stable/howto/docker-compose/index.html#setting-the-right-airflow-user"
+                                        echo
+                                fi
+                                one_meg=1048576
+                                mem_available=$$(($$(getconf _PHYS_PAGES) * $$(getconf PAGE_SIZE) / one_meg))
+                                cpus_available=$$(grep -cE 'cpu[0-9]+' /proc/stat)
+                                disk_available=$$(df / | tail -1 | awk '{print $$4}')
+                                warning_resources="false"
+                                if (( mem_available < 4000 )) ; then
+                                        echo
+                                        echo -e "\033[1;33mWARNING!!!: Not enough memory available for Docker.\e[0m"
+                                        echo "At least 4GB of memory required. You have $$(numfmt --to iec $$((mem_available * one_meg)))"
+                                        echo
+                                        warning_resources="true"
+                                fi
+                                if (( cpus_available < 2 )); then
+                                        echo
+                                        echo -e "\033[1;33mWARNING!!!: Not enough CPUS available for Docker.\e[0m"
+                                        echo "At least 2 CPUs recommended. You have $${cpus_available}"
+                                        echo
+                                        warning_resources="true"
+                                fi
+                                if (( disk_available < one_meg * 10 )); then
+                                        echo
+                                        echo -e "\033[1;33mWARNING!!!: Not enough Disk space available for Docker.\e[0m"
+                                        echo "At least 10 GBs recommended. You have $$(numfmt --to iec $$((disk_available * 1024 )))"
+                                        echo
+                                        warning_resources="true"
+                                fi
+                                if [[ $${warning_resources} == "true" ]]; then
+                                        echo
+                                        echo -e "\033[1;33mWARNING!!!: You have not enough resources to run Airflow (see above)!\e[0m"
+                                        echo "Please follow the instructions to increase amount of resources available:"
+                                        echo "   https://airflow.apache.org/docs/apache-airflow/stable/howto/docker-compose/index.html#before-you-begin"
+                                        echo
+                                fi
+                                mkdir -p /sources/logs /sources/dags /sources/plugins
+                                chown -R "${AIRFLOW_UID}:0" /sources/{logs,dags,plugins}
+                                exec /entrypoint airflow version
+                environment:
+                        <<: *airflow-common-env
+                        _AIRFLOW_DB_MIGRATE: 'true'
+                        _AIRFLOW_WWW_USER_CREATE: 'true'
+                        _AIRFLOW_WWW_USER_USERNAME: ${AIRFLOW_USER}
+                        _AIRFLOW_WWW_USER_PASSWORD: ${AIRFLOW_PASSWORD}
+                        _PIP_ADDITIONAL_REQUIREMENTS: ''
+                user: "0:0"
+                volumes:
+                        - ${AIRFLOW_PROJ_DIR}:/sources
+                networks:
+                        - app-network
+
+        airflow-cli:
+                <<: *airflow-common
+                container_name: airflow-cli
+                profiles:
+                        - debug
+                environment:
+                        <<: *airflow-common-env
+                        CONNECTION_CHECK_MAX_COUNT: "0"
+                command:
+                        - bash
+                        - -c
+                        - airflow
+                networks:
+                        - app-network
+
+        flower:
+                <<: *airflow-common
+                container_name: airflow-flower
+                command: celery flower
+                profiles:
+                        - flower
+                ports:
+                        - "${AIRFLOW_FLOWER_PORT}:${AIRFLOW_FLOWER_PORT}"
+                networks:
+                        - app-network
+                restart: always
+                healthcheck:
+                        test: ["CMD", "curl", "--fail", "${AIRFLOW_FLOWER_URL}"]
+                        interval: 30s
+                        timeout: 10s
+                        retries: 5
+                        start_period: 30s
+                depends_on:
+                        <<: *airflow-common-depends-on
+                        airflow-init:
+                                condition: service_completed_successfully
+
+        streamlit:
+                build:
+                        context: .
+                        dockerfile: dockerfiles/streamlit
+                container_name: streamlit
+                ports:
+                        - "${APP_SERVER_PORT}:${APP_SERVER_PORT}"
+                environment:
+                        - APP_DB_HOST=app-db
+                        - APP_DB_PORT=${APP_DB_PORT}
+                        - APP_DB_NAME=${APP_DB_NAME}
+                        - APP_DB_USER=${APP_DB_STREAMLIT_USER}
+                        - APP_DB_PASSWORD=${APP_DB_STREAMLIT_PASSWORD}
+                env_file:
+                        - .env
+                networks:
+                        - app-network
+                depends_on:
+                        app-db:
+                                condition: service_healthy
+                        app-s3:
+                                condition: service_healthy
+                        app-s3-init:
+                                condition: service_completed_successfully
+
+volumes:
+        app-postgres-db:
+        minio-storage:
+        airflow-postgres-db:
+        config:
+        dags:
+        logs:
+        plugins:
+
+networks:
+        app-network:
+                driver: bridge
