@@ -20,9 +20,9 @@ st.write(df)
 
 st.write('Object Storage connection:')
 storage_client = Minio(
-    'minio:9000',
-    access_key=os.getenv('STORAGE_STREAMLIT_USER'),
-    secret_key=os.getenv('STORAGE_STREAMLIT_PASSWORD'),
+    f'app-s3:{os.getenv("S3_API_PORT")}',
+    access_key=os.getenv('S3_STREAMLIT_USER'),
+    secret_key=os.getenv('S3_STREAMLIT_PASSWORD'),
     secure=False # Set to True for secure (HTTPS) access
 )
 try:

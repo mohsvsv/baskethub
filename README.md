@@ -1,49 +1,61 @@
 # Dev Commands
 
-## BasketHub
-
 up
 ```bash
-docker compose -f baskethub-app/docker-compose.yaml up --build -d
+docker-compose up --build -d
 ```
 
 down
 ```bash
-docker compose -f baskethub-app/docker-compose.yaml down -v
+docker-compose down -v
 ```
 
 start
 ```bash
-docker compose -f baskethub-app/docker-compose.yaml start
+docker-compose start
 ```
 
 stop
 ```bash
-docker compose -f baskethub-app/docker-compose.yaml stop
+docker-compose stop
 ```
 
----
-## Airflow
+# Repository Structure
 
-up
 ```bash
-docker compose -f baskethub-airflow/docker-compose.yaml up --build -d
+baskethub/
+│
+├── airflow/                    # Airflow services
+│   ├── config/                 # config files
+│   ├── dags/                   # DAG files
+│   ├── logs/                   # log files
+│   ├── plugins/                # custom plugins
+│   └── requirements.txt        # python dependencies specifically for Airflow
+│
+├── app/                        # Streamlit web application
+│   ├── app.py
+│   └── requirements.txt        # python dependencies specifically for the application
+│
+├── core/
+│   └── requirements.txt        # common python dependencies
+│
+├── diagrams/                   # documentation assets
+│   ├── data_model.erd
+│   └── data_model.png
+│
+├── dockerfiles/                 # component-specific Docker configurations
+│   ├── airflow
+│   ├── database
+│   └── streamlit
+│
+├── scripts/                    # initialization scripts
+│   ├── init-app-db.sh          # configuring the database for the application
+│   └── init-app.sh             # configuring the application
+│
+├── docker-compose.yaml         # main Docker configuration
+└── README.md                   # project documentation
 ```
 
-down
-```bash
-docker compose -f baskethub-airflow/docker-compose.yaml down -v
-```
-
-start
-```bash
-docker compose -f baskethub-airflow/docker-compose.yaml start
-```
-
-stop
-```bash
-docker compose -f baskethub-airflow/docker-compose.yaml stop
-```
 
 
 # Data Model
@@ -215,7 +227,7 @@ The data model includes the following tables:
 
 <br/>
 
-![Data Model - Core](/documentation/data_model.png)
+![Data Model - Core](/diagrams/data_model.png)
 
 <br/>
 
